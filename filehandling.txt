@@ -1,0 +1,803 @@
+Java has had input/output (I/O) support since the very first version. However, due
+to Java’s strong desire for platform independence, the earlier versions of I/O func‐
+tionality emphasized portability over functionality. As a result, they were not always
+easy to work with.
+We’ll see later in the chapter how the original APIs have been supplemented—they
+are now rich, fully featured, and very easy to develop with. Let’s kick off the chapter
+by looking at the original, “classic” approach to Java I/O, which the more modern
+approaches layer on top of.
+Classic Java I/O
+The File class is the cornerstone of Java’s original way to do file I/O. This abstrac‐
+tion can represent both files and directories, but in doing so is sometimes a bit cum‐
+bersome to deal with, and leads to code like this:
+// Get a file object to represent the user's home directory
+File homedir = new File(System.getProperty("user.home"));
+// Create an object to represent a config file (should
+// already be present in the home directory)
+File f = new File(homedir, "app.conf");
+// Check the file exists, really is a file & is readable
+if (f.exists() && f.isFile() && f.canRead()) {
+ // Create a file object for a new configuration directory
+ File configdir = new File(f, ".configdir");
+ // And create it
+ configdir.mkdir();
+ // Finally, move the config file to its new home
+ f.renameTo(new File(configdir, ".config"));
+}
+This shows some of the flexibility possible with the File class, but also demon‐
+strates some of the problems with the abstraction. It is very general, and this
+requires a lot of methods to interrogate a File object in order to determine what it
+actually represents and its capabilities.
+Files
+The File class has a very large number of methods on it, but some basic functional‐
+ity (notably a way to read the contents of a file) is not, and never has been provided
+directly.
+Here’s a quick summary of File methods:
+// Permissions management
+boolean canX = f.canExecute();
+boolean canR = f.canRead();
+boolean canW = f.canWrite();
+boolean ok;
+ok = f.setReadOnly();
+ok = f.setExecutable(true);
+ok = f.setReadable(true);
+ok = f.setWritable(false);
+// Different views of the file's name
+File absF = f.getAbsoluteFile();
+File canF = f.getCanonicalFile();
+String absName = f.getAbsolutePath();
+String canName = f.getCanonicalPath();
+String name = f.getName();
+String pName = getParent();
+URI fileURI = f.toURI(); // Create URI for File path
+// File metadata
+boolean exists = f.exists();
+boolean isAbs = f.isAbsolute();
+boolean isDir = f.isDirectory();
+boolean isFile = f.isFile();
+boolean isHidden = f.isHidden();
+long modTime = f.lastModified(); // milliseconds since epoch
+boolean updateOK = f.setLastModified(updateTime); // milliseconds
+long fileLen = f.length();
+// File management operations
+boolean renamed = f.renameTo(destFile);
+boolean deleted = f.delete();
+// Create won't overwrite existing file
+boolean createdOK = f.createNewFile();
+// Temporary file handling
+File tmp = File.createTempFile("my-tmp", ".tmp");
+tmp.deleteOnExit();
+// Directory handling
+boolean createdDir = dir.mkdir();
+String[] fileNames = dir.list();
+File[] files = dir.listFiles();
+The File class also has a few methods on it that aren’t a perfect fit for the abstrac‐
+tion. They largely involve interrogating the filesystem (e.g., inquiring about avail‐
+able free space):
+long free, total, usable;
+free = f.getFreeSpace();
+total = f.getTotalSpace();
+usable = f.getUsableSpace();
+File[] roots = File.listRoots(); // all available Filesystem roots
+
+Streams
+The I/O stream abstraction (not to be confused with the streams that are used when
+dealing with the Java 8 Collection APIs) was present in Java 1.0, as a way of dealing
+with sequential streams of bytes from disks or other sources.
+The core of this API is a pair of abstract classes, InputStream and OutputStream.
+These are very widely used, and in fact the “standard” input and output streams,
+which are called System.in and System.out, are streams of this type. They are pub‐
+lic, static fields of the System class, and are often used in even the simplest pro‐
+grams:
+System.out.println("Hello World!");
+Specific subclasses of streams, including FileInputStream, and FileOutputStream
+can be used to operate on individual bytes in a file—for example, by counting all the
+times ASCII 97 (small letter a) occurs in a file:
+try (InputStream is = new FileInputStream("/Users/ben/cluster.txt")) {
+ byte[] buf = new byte[4096];
+ int len, count = 0;
+ while ((len = is.read(buf)) > 0) {
+ for (int i=0; i<len; i++)
+ if (buf[i] == 97) count++;
+ }
+ System.out.println("'a's seen: "+ count);
+} catch (IOException e) {
+ e.printStackTrace();
+}
+This approach to dealing with on-disk data can lack some flexibility—most develop‐
+ers think in terms of characters, not bytes. To allow for this, the streams are usually
+combined with the higher-level Reader and Writer classes, that provide a characterstream level of interaction, rather than the low-level byte stream provided by Input
+Stream and OutputStream and their subclasses.
+Readers and Writers
+By moving to an abstraction that deals in characters, rather than bytes, developers
+are presented with an API that is much more familiar, and that hides many of the
+issues with character encoding, Unicode, and so on.
+The Reader and Writer classes are intended to overlay the byte stream classes, and
+to remove the need for low-level handling of I/O streams. They have several sub‐
+classes that are often used to layer on top of each other, such as:
+• FileReader
+• BufferedReader
+• InputStreamReader
+• FileWriter
+• PrintWriter
+• BufferedWriter
+To read all lines in from a file, and print them out, we use a BufferedReader layered
+on top of a FileReader, like this:
+try (BufferedReader in =
+ new BufferedReader(new FileReader(filename))) {
+ String line;
+ while((line = in.readLine()) != null) {
+ System.out.println(line);
+ }
+} catch (IOException e) {
+ // Handle FileNotFoundException, etc. here
+}
+If we need to read in lines from the console, rather than a file, we will usually use an
+InputStreamReader applied to System.in. Let’s look at an example where we want
+to read in lines of input from the console, but treat input lines that start with a spe‐
+cial character as special—commands (“metas”) to be processed, rather than regular
+text. This is a common feature of many chat programs, including IRC. We’ll use
+regular expressions from Chapter 9 to help us:
+Pattern SHELL_META_START = Pattern.compile("^#(\\w+)\\s*(\\w+)?");
+try (BufferedReader console =
+ new BufferedReader(new InputStreamReader(System.in))) {
+String line;
+ READ: while((line = console.readLine()) != null) {
+ // Check for special commands ("metas")
+ Matcher m = SHELL_META_START.matcher(line);
+ if (m.find()) {
+ String metaName = m.group(1);
+ String arg = m.group(2);
+ doMeta(metaName, arg);
+ continue READ;
+ }
+ System.out.println(line);
+ }
+} catch (IOException e) {
+ // Handle FileNotFoundException, etc. here
+}
+To output text to a file, we can use code like this:
+File f = new File(System.getProperty("user.home")
++ File.separator + ".bashrc");
+try (PrintWriter out
+ = new PrintWriter(new BufferedWriter(new FileWriter(f)))) {
+ out.println("## Automatically generated config file. DO NOT EDIT");
+} catch (IOException iox) {
+ // Handle exceptions
+}
+This older style of Java I/O has a lot of other functionality that is occasionally useful.
+For example, to deal with text files, the FilterInputStream class is quite often use‐
+ful. Or for threads that want to communicate in a way similar to the classic “piped”
+I/O approach, PipedInputStream, PipedReader, and their write counterparts are
+provided.
+Throughout this chapter so far, we have used the language feature known as "trywith-resources” (TWR). This syntax was briefly introduced in “The try-withresources Statement” on page 63, but it is in conjunction with operations like I/O
+that it comes into its fullest potential, and it has granted a new lease on life to the
+older I/O style.
+try-with-resources Revisited
+To make the most of Java’s I/O capabilities, it is important to understand how and
+when to use TWR. It is very easy to understand when code should use TWR—
+whenever it is possible to do so.
+Before TWR, resources had to be closed manually, and complex interactions
+between resources that could fail to close led to buggy code that could leak
+resources.
+
+try-with-resources Revisited
+To make the most of Java’s I/O capabilities, it is important to understand how and
+when to use TWR. It is very easy to understand when code should use TWR—
+whenever it is possible to do so.
+Before TWR, resources had to be closed manually, and complex interactions
+between resources that could fail to close led to buggy code that could leak
+resources.
+In fact, Oracle’s engineers estimate that 60% of the resource handling code in the
+initial JDK 6 release was incorrect. So, if even the platform authors can’t reliably get
+manual resource handling right, then all new code should definitely be using TWR.
+The key to TWR is a new interface—AutoCloseable. This is a new interface
+(appears in Java 7) that is a direct superinterface of Closeable. It marks a resource
+that must be automatically closed, and for which the compiler will insert special
+exception-handling code.
+Inside a TWR resource clause, only declarations of objects that implement Auto
+Closeable objects may appear—but the developer may declare as many as required:
+try (BufferedReader in = new BufferedReader(
+ new FileReader("profile"));
+ PrintWriter out = new PrintWriter(
+ new BufferedWriter(
+ new FileWriter("profile.bak")))) {
+ String line;
+ while((line = in.readLine()) != null) {
+ out.println(line);
+ }
+} catch (IOException e) {
+ // Handle FileNotFoundException, etc. here
+}
+The consequences of this are that resources are automatically scoped to the try
+block. The resources (whether readable or writable) are automatically closed in the
+correct order, and the compiler inserts exception handling that takes dependencies
+between resources into account.
+The overall effect of TWR is similar to C#’s using keyword, and the developer may
+regard it as “finalization done right.” As noted in “Finalization” on page 206, new
+code should never directly use the finalization mechanism, and should always use
+TWR instead. Older code should be refactored to use TWR as soon as is practicable.
+
+Problems with Classic I/O
+Even with the welcome addition of try-with-resources, the File class and friends
+have a number of problems that make them less than ideal for extensive use when
+performing even standard I/O operations. For instance:
+• “Missing methods” for common operations
+• Does not deal with filenames consistently across platforms
+• Fails to have a unified model for file attributes (e.g., modeling read/write
+access)
+• Difficult to traverse unknown directory structures
+• No platform or OS–specific features
+• Nonblocking operations for filesystems not supported
+To deal with these shortcomings, Java’s I/O has evolved over several major releases.
+It was really with the release of Java 7 that this support became truly easy and effec‐
+tive to use.
+
+Modern Java I/O
+Java 7 brought in a brand new I/O API—usually called NIO.2—and it should be
+considered almost a complete replacement for the original File approach to I/O.
+The new classes are contained in the java.nio.file package.
+The new API that was brought in with Java 7 is considerably easier to use for many
+use cases. It has two major parts. The first is a new abstraction called Path (which
+can be thought of as representing a file location, which may or may not have any‐
+thing actually at that location). The second piece is lots of new convenience and
+utility methods to deal with files and filesystems. These are contained as static
+methods in the Files class.
+Files
+For example, when using the new Files functionality, a basic copy operation is now
+as simple as:
+File inputFile = new File("input.txt");
+try (InputStream in = new FileInputStream(inputFile)) {
+ Files.copy(in, Paths.get("output.txt"));
+} catch(IOException ex) {
+ ex.printStackTrace();
+}
+Let’s take a quick survey of some of the major methods in Files—the operation of
+most of them is pretty self-explanatory. In many cases, the methods have return
+types. We have omitted handling these, as they are rarely useful except for contrived
+examples, and for duplicating the behavior of the equivalent C code:
+Path source, target;
+Attributes attr;
+Charset cs = StandardCharsets.UTF_8;
+// Creating files
+//
+// Example of path --> /home/ben/.profile
+// Example of attributes --> rw-rw-rwFiles.createFile(target, attr);
+// Deleting files
+Files.delete(target);
+boolean deleted = Files.deleteIfExists(target);
+// Copying/Moving files
+Files.copy(source, target);
+Files.move(source, target);
+// Utility methods to retrieve information
+long size = Files.size(target);
+FileTime fTime = Files.getLastModifiedTime(target);
+System.out.println(fTime.to(TimeUnit.SECONDS));
+Map<String, ?> attrs = Files.readAttributes(target, "*");
+System.out.println(attrs);
+// Methods to deal with file types
+boolean isDir = Files.isDirectory(target);
+boolean isSym = Files.isSymbolicLink(target);
+// Methods to deal with reading and writing
+List<String> lines = Files.readAllLines(target, cs);
+byte[] b = Files.readAllBytes(target);
+BufferedReader br = Files.newBufferedReader(target, cs);
+BufferedWriter bwr = Files.newBufferedWriter(target, cs);
+InputStream is = Files.newInputStream(target);
+OutputStream os = Files.newOutputStream(target);
+Some of the methods on Files provide the opportunity to pass optional arguments,
+to provide additional (possibly implementation-specific) behavior for the operation.
+Some of the API choices here produce occasionally annoying behavior. For exam‐
+ple, by default, a copy operation will not overwrite an existing file, so we need to
+specify this behavior as a copy option:
+Files.copy(Paths.get("input.txt"), Paths.get("output.txt"),
+ StandardCopyOption.REPLACE_EXISTING);
+StandardCopyOption is an enum that implements an interface called CopyOption.
+This is also implemented by LinkOption. So Files.copy() can take any number of
+either LinkOption or StandardCopyOption arguments. LinkOption is used to spec‐
+ify how symbolic links should be handled (provided the underlying OS supports
+symlinks, of course).
+Path
+Path is a type that may be used to locate a file in a filesystem. It represents a path
+that is:
+• System dependent
+• Hierarchical
+• Composed of a sequence of path elements
+• Hypothetical (may not exist yet, or may have been deleted)
+It is therefore fundamentally different to a File. In particular, the system depend‐
+ency is manifested by Path being an interface, not a class. This enables different file‐
+system providers to each implement the Path interface, and provide for systemspecific features while retaining the overall abstraction.
+The elements of a Path consist of an optional root component, which identifies the
+filesystem hierarchy that this instance belongs to. Note that, for example, relative
+Path instances may not have a root component. In addition to the root, all Path
+instances have zero or more directory names and a name element.
+The name element is the element farthest from the root of the directory hierarchy
+and represents the name of the file or directory. The Path can be thought of consist‐
+ing of the path elements joined together by a special separator or delimiter.
+Path is an abstract concept; it isn’t necessarily bound to any physical file path. This
+allows us to talk easily about the locations of files that don’t exist yet. Java ships with
+a Paths class that provides factory methods for creating Path instances.
+Paths provides two get() methods for creating Path objects. The usual version
+takes a String, and uses the default filesystem provider. The URI version takes
+advantage of the ability of NIO.2 to plug in additional providers of bespoke filesys‐
+tems. This is an advanced usage, and interested developers should consult the pri‐
+mary documentation:
+Path p = Paths.get("/Users/ben/cluster.txt");
+Path p = Paths.get(new URI("file:///Users/ben/cluster.txt"));
+System.out.println(p2.equals(p));
+File f = p.toFile();
+System.out.println(f.isDirectory());
+Path p3 = f.toPath();
+System.out.println(p3.equals(p));
+This example also shows the easy interoperation between Path and File objects.
+The addition of a toFile() method to Path and a toPath() method to File allows
+the developer to move effortlessly between the two APIs and allows for a straight‐
+forward approach to refactoring the internals of code based on File to use Path
+instead.
+We can also make use of some useful “bridge” methods that the Files class also
+provides. These provide convenient access to the older I/O APIs—for example, by
+providing convenience methods to open Writer objects to specified Path locations:
+Path logFile = Paths.get("/tmp/app.log");
+try (BufferedWriter writer =
+ Files.newBufferedWriter(logFile, StandardCharsets.UTF_8,
+ StandardOpenOption.WRITE)) {
+ writer.write("Hello World!");
+ // ...
+} catch (IOException e) {
+ // ...
+}
+We’re making use of the StandardOpenOption enum, which provides similar capa‐
+bilities to the copy options, but for the case of opening a new file instead.
+In this example use case, we have used the Path API to:
+• Create a Path corresponding to a new file
+• Use the Files class to create that new file
+• Open a Writer to that file
+• Write to that file
+• Automatically close it when done
+In our next example, we’ll build on this to manipulate a .jar file as a FileSystem in
+its own right, modifying it to add an additional file directly into the JAR. JAR files
+are just ZIP files, so this technique will also work for .zip archives:
+Path tempJar = Paths.get("sample.jar");
+try (FileSystem workingFS =
+ FileSystems.newFileSystem(tempJar, null)) {
+ Path pathForFile = workingFS.getPath("/hello.txt");
+ List<String> ls = new ArrayList<>();
+ ls.add("Hello World!");
+ Files.write(pathForFile, ls, Charset.defaultCharset(),
+ StandardOpenOption.WRITE, StandardOpenOption.CREATE);
+}
+This shows how we use a FileSystem to make the Path objects inside it, via the
+getPath() method. This enables the developer to effectively treat FileSystem
+objects as black boxes.
+One of the criticisms of Java’s original I/O APIs was the lack of support for native
+and high-performance I/O. A solution was initially added in Java 1.4, the Java New
+I/O (NIO) API, and it has been successively refined in successive Java versions.
+NIO Channels and Buers
+NIO buffers are a low-level abstraction for high-performance I/O. They provide a
+container for a linear sequence of elements of a specific primitive type. We’ll work
+with the ByteBuffer (the most common case) in our examples.
+ByteBuer
+This is a sequence of bytes, and can conceptually be thought of as a performancecritical alternative to working with a byte[]. To get the best possible performance,
+ByteBuffer provides support for dealing directly with the native capabilities of the
+platform the JVM is running on.
+This approach is called the “direct buffers” case, and it bypasses the Java heap wher‐
+ever possible. Direct buffers are allocated in native memory, not on the standard
+Java heap, and they are not subject to garbage collection in the same way as regular
+on-heap Java objects.
+To obtain a direct ByteBuffer, call the allocateDirect() factory method. An onheap version, allocate(), is also provided, but in practice this is not often used.
+A third way to obtain a byte buffer is to wrap an existing byte[]—this will give an
+on-heap buffer that serves to provide a more object-oriented view of the underlying
+bytes:
+ByteBuffer b = ByteBuffer.allocateDirect(65536);
+ByteBuffer b2 = ByteBuffer.allocate(4096);
+byte[] data = {1, 2, 3};
+ByteBuffer b3 = ByteBuffer.wrap(data);
+Byte buffers are all about low-level access to the bytes. This means that developers
+have to deal with the details manually—including the need to handle the endianness
+of the bytes and the signed nature of Java’s integral primitives:
+b.order(ByteOrder.BIG_ENDIAN);
+int capacity = b.capacity();
+int position = b.position();
+int limit = b.limit();
+int remaining = b.remaining();
+boolean more = b.hasRemaining();
+To get data in or out of a buffer, we have two types of operation—single value,
+which reads or writes a single value, and bulk, which takes a byte[] or ByteBuffer
+and operates on a (potentially large) number of values as a single operation. It is
+from the bulk operations that performance gains would expect to be realized:
+b.put((byte)42);
+b.putChar('x');
+b.putInt(0xcafebabe);
+b.put(data);
+b.put(b2);
+double d = b.getDouble();
+b.get(data, 0, data.length);
+The single value form also supports a form used for absolute positioning within the
+buffer:
+b.put(0, (byte)9);
+Buffers are an in-memory abstraction. To affect the outside world (e.g., the file or
+network), we need to use a Channel, from the package java.nio.channels. Chan‐
+nels represent connections to entities that can support read or write operations.
+Files and sockets are the usual examples of channels, but we could consider custom
+implementations used for low-latency data processing.
+Channels are open when they’re created, and can subsequently be closed. Once
+closed, they cannot be reopened. Channels are usually either readable or writable,
+but not both. The key to understanding channels is that:
+• Reading from a channel puts bytes into a buffer
+• Writing to a channel takes bytes from a buffer
+For example, suppose we have a large file that we want to checksum in 16M chunks:
+FileInputStream fis = getSomeStream();
+boolean fileOK = true;
+try (FileChannel fchan = fis.getChannel()) {
+ ByteBuffer buffy = ByteBuffer.allocateDirect(16 * 1024 * 1024);
+ while(fchan.read(buffy) != -1 || buffy.position() > 0 || fileOK) {
+ fileOK = computeChecksum(buffy);
+ buffy.compact();
+ }
+} catch (IOException e) {
+ System.out.println("Exception in I/O");
+}
+This will use native I/O as far as possible, and will avoid a lot of copying of bytes on
+and off the Java heap. If the computeChecksum() method has been well imple‐
+mented, then this could be a very performant implementation.
+Mapped Byte Buers
+These are a type of direct byte buffer that contain a memory-mapped file (or a
+region of one). They are created from a FileChannel object, but note that the File
+object corresponding to the MappedByteBuffer must not be used after the memorymapped operations, or an exception will be thrown. To mitigate this, we again use
+try-with-resources, to scope the objects tightly:
+try (RandomAccessFile raf =
+ new RandomAccessFile(new File("input.txt"), "rw");
+ FileChannel fc = raf.getChannel();) {
+ MappedByteBuffer mbf =
+ fc.map(FileChannel.MapMode.READ_WRITE, 0, fc.size());
+ byte[] b = new byte[(int)fc.size()];
+ mbf.get(b, 0, b.length);
+ for (int i=0; i<fc.size(); i++) {
+ b[i] = 0; // Won't be written back to the file, we're a copy
+ }
+mbf.position(0);
+ mbf.put(b); // Zeros the file
+}
+Even with buffers, there are limitations of what can be done in Java for large (e.g.,
+transferring 10G between filesystems) I/O operations that perform synchronously
+on a single thread. Before Java 7, these types of operations would typically be done
+by writing custom multithreaded code, and managing a separate thread for per‐
+forming a background copy. Let’s move on to look at the new asynchronous I/O fea‐
+tures that were added with JDK 7.
+Async I/O
+The key to the new asynchronous functionality are some new subclasses of Channel
+that can deal with I/O operations that need to be handed off to a background
+thread. The same functionality can be applied to large, long-running operations,
+and to several other use cases.
+In this section, we’ll deal exclusively with AsynchronousFileChannel for file I/O,
+but there are a couple of other asynchronous channels to be aware of. We’ll deal
+with asynchronous sockets at the end of the chapter. We’ll look at:
+• AsynchronousFileChannel for file I/O
+• AsynchronousSocketChannel for client socket I/O
+• AsynchronousServerSocketChannel for asynchronous sockets that accept
+incoming connections
+There are two different ways to interact with an asynchronous channel—Future
+style, and callback style.
+Future-Based Style
+We’ll meet the Future interface in detail in Chapter 11, but for the purpose of this
+chapter, it can be thought of as an ongoing task that may or may not have completed
+yet. It has two key methods:
+isDone()
+Returns a Boolean indicating whether the task has finished.
+get()
+Returns the result. If finished, returns immediately. If not finished, blocks until
+done.
+Let’s look at an example of a program that reads a large file (possibly as large as 100
+Mb) asynchronously:
+try (AsynchronousFileChannel channel =
+ AsynchronousFileChannel.open(Paths.get("input.txt"))) {
+ ByteBuffer buffer = ByteBuffer.allocateDirect(1024 * 1024 * 100);
+ Future<Integer> result = channel.read(buffer, 0);
+ while(!result.isDone()) {
+ // Do some other useful work....
+ }
+ System.out.println("Bytes read: " + result.get());
+}
+Callback-Based Style
+The callback style for asynchronous I/O is based on a CompletionHandler, which
+defines two methods, completed() and failed(), that will be called back when the
+operation either succeeds or fails.
+This style is useful if you want immediate notification of events in asynchronous
+I/O—for example, if there are a large number of I/O operations in flight, but failure
+of any single operation is not necessarily fatal:
+byte[] data = {2, 3, 5, 7, 11, 13, 17, 19, 23};
+ByteBuffer buffy = ByteBuffer.wrap(data);
+CompletionHandler<Integer,Object> h =
+ new CompletionHandler() {
+ public void completed(Integer written, Object o) {
+ System.out.println("Bytes written: " + written);
+ }
+ public void failed(Throwable x, Object o) {
+ System.out.println("Asynch write failed: "+ x.getMessage());
+ }
+};
+try (AsynchronousFileChannel channel =
+ AsynchronousFileChannel.open(Paths.get("primes.txt"),
+ StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+ channel.write(buffy, 0, null, h);
+ Thread.sleep(1000); // Needed so we don't exit too quickly
+}
+The AsynchronousFileChannel object is associated with a background thread pool,
+so that the I/O operation proceeds, while the original thread can get on with other
+tasks.
+By default, this uses a managed thread pool that is provided by the runtime. If
+required, it can be created to use a thread pool that is managed by the application
+(via an overloaded form of AsynchronousFileChannel.open()), but this is not
+often necessary.
+Finally, for completeness, let’s touch upon NIO’s support for multiplexed I/O. This
+enables a single thread to manage multiple channels and to examine those channels
+to see which are ready for reading or writing. The classes to support this are in the
+java.nio.channels package and include SelectableChannel and Selector.
+These nonblocking multiplexed techniques can be extremely useful when writing
+advanced applications that require high scalability, but a full discussion is outside
+the scope of this book.
+Watch Services and Directory Searching
+The last class of asynchronous services we will consider are those that watch a direc‐
+tory, or visit a directory (or a tree). The watch services operate by observing every‐
+thing that happens within a directory—for example, the creation or modification of
+files:
+try {
+ WatchService watcher = FileSystems.getDefault().newWatchService();
+ Path dir = FileSystems.getDefault().getPath("/home/ben");
+ WatchKey key = dir.register(watcher,
+ StandardWatchEventKinds.ENTRY_CREATE,
+StandardWatchEventKinds.ENTRY_MODIFY,
+StandardWatchEventKinds.ENTRY_DELETE);
+ while(!shutdown) {
+ key = watcher.take();
+ for (WatchEvent<?> event: key.pollEvents()) {
+ Object o = event.context();
+ if (o instanceof Path) {
+ System.out.println("Path altered: "+ o);
+ }
+ }
+ key.reset();
+ }
+}
+By contrast, the directory streams provide a view into all files currently in a single
+directory. For example, to list all the Java source files and their size in bytes, we can
+use code like:
+try(DirectoryStream<Path> stream =
+ Files.newDirectoryStream(Paths.get("/opt/projects"), "*.java")) {
+ for (Path p : stream) {
+ System.out.println(p +": "+ Files.size(p));
+ }
+}
+One drawback of this API is that this will only return elements that match accord‐
+ing to glob syntax, which is sometimes insufficiently flexible. We can go further by
+using the new Files.find() and Files.walk() methods to address each element
+obtained by a recursive walk through the directory:
+final Pattern isJava = Pattern.compile(".*\\.java$");
+final Path homeDir = Paths.get("/Users/ben/projects/");
+Files.find(homeDir, 255,
+ (p, attrs) -> isJava.matcher(p.toString()).find())
+ .forEach(q -> {System.out.println(q.normalize());});
+It is possible to go even further, and construct advanced solutions based on the File
+Visitor interface in java.nio.file, but that requires the developer to implement
+all four methods on the interface, rather than just using a single lambda expression
+as done here.
+In the last section of this chapter, we will discuss Java’s networking support and the
+core JDK classes that enable it.
+Networking
+The Java platform provides access to a large number of standard networking proto‐
+cols, and these make writing simple networked applications quite easy. The core of
+Java’s network support lives in the package java.net, with additional extensibility
+provided by javax.net (and in particular, javax.net.ssl).
+One of the easiest protocols to use for building applications is HyperText Transmis‐
+sion Protocol (HTTP), the protocol that is used as the basic communication proto‐
+col of the Web.
+HTTP
+HTTP is the highest-level network protocol that Java supports out of the box. It is a
+very simple, text-based protocol, implemented on top of the standard TCP/IP stack.
+It can run on any network port, but is usually found on port 80.
+URL is the key class—it supports URLs of the form http://, ftp://, file://, and
+https:// out of the box. It is very easy to use, and the simplest example of Java
+HTTP support is to download a particular URL. With Java 8, this is just:
+URL url = new URL("http://www.jclarity.com/");
+try (InputStream in = url.openStream()) {
+ Files.copy(in, Paths.get("output.txt"));
+} catch(IOException ex) {
+ ex.printStackTrace();
+}
+For more low-level control, including metadata about the request and response, we
+can use URLConnection to give us more control, and achieve something like:
+try {
+ URLConnection conn = url.openConnection();
+ String type = conn.getContentType();
+ String encoding = conn.getContentEncoding();
+ Date lastModified = new Date(conn.getLastModified());
+ int len = conn.getContentLength();
+ InputStream in = conn.getInputStream();
+} catch (IOException e) {
+ // Handle exception
+}
+HTTP defines “request methods,” which are the operations that a client can make
+on a remote resource. These methods are called:
+GET, POST, HEAD, PUT, DELETE, OPTIONS, TRACE
+Each has slightly different usages, for example:
+• GET should only be used to retrieve a document and NEVER should perform
+any side effects.
+• HEAD is equivalent to GET except the body is not returned—useful if a pro‐
+gram wants to quickly check whether a URL has changed.
+• POST is used when we want to send data to a server for processing.
+By default, Java always uses GET, but it does provide a way to use other methods for
+building more complex applications; however, doing so is a bit involved. In this next
+example, we’re using the search function provided by the BBC website to search for
+news articles about Java:
+URL url = new URL("http://www.bbc.co.uk/search");
+String rawData = "q=java";
+String encodedData = URLEncoder.encode(rawData, "ASCII");
+String contentType = "application/x-www-form-urlencoded";
+HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+conn.setInstanceFollowRedirects(false);
+conn.setRequestMethod("POST");
+conn.setRequestProperty("Content-Type", contentType );
+conn.setRequestProperty("Content-Length",
+ String.valueOf(encodedData.length()));
+conn.setDoOutput(true);
+OutputStream os = conn.getOutputStream();
+os.write( encodedData.getBytes() );
+int response = conn.getResponseCode();
+if (response == HttpURLConnection.HTTP_MOVED_PERM
+ || response == HttpURLConnection.HTTP_MOVED_TEMP) {
+ System.out.println("Moved to: "+ conn.getHeaderField("Location"));
+} else {
+ try (InputStream in = conn.getInputStream()) {
+ Files.copy(in, Paths.get("bbc.txt"),
+ StandardCopyOption.REPLACE_EXISTING);
+ }
+}
+Notice that we needed to send our query parameters in the body of a request, and to
+encode them before sending. We also had to disable following of HTTP redirects,
+and to treat any redirection from the server manually. This is due to a limitation of
+the HttpURLConnection class, which does not deal well with redirection of POST
+requests.
+In most cases, when implementing these types of more advanced HTTP applica‐
+tions, developers would usually use a specialist HTTP client library, such as the one
+provided by Apache, rather than coding the whole thing from scratch using JDK
+classes.
+Let’s move on to look at the next layer down the networking stack, the Transmission
+Control Protocol (TCP).
+TCP
+TCP is the basis of reliable network transport over the Internet. It ensures that web
+pages and other Internet traffic are delivered in a complete and comprehensible
+state. From a networking theory standpoint, the protocol properties that allow TCP
+to function as this “reliability layer” for Internet traffic are:
+Connection based
+Data belongs to a single logical stream (a connection).
+Guaranteed delivery
+Data packets will be resent until they arrive.
+Error checked
+Damage caused by network transit will be detected and fixed automatically.
+TCP is a two-way (or bidirectional) communication channel, and uses a special
+numbering scheme (TCP Sequence numbers) for data chunks to ensure that both
+sides of a communication stream stay in sync. In order to support many different
+services on the same network host, TCP uses port numbers to identify services, and
+ensures that traffic intended for one port does not go to a different one.
+In Java, TCP is represented by the classes Socket and ServerSocket. They are used
+to provide the capability to be the client and server side of the connection respec‐
+tively—meaning that Java can be used both to connect to network services, and as a
+language for implementing new services.
+As an example, let’s consider reimplementing HTTP. This is a relatively simple, textbased protocol. We’ll need to implement both sides of the connection, so let’s start
+with a HTTP client on top of a TCP socket. To accomplish this, we will actually
+need to implement the details of the HTTP protocol, but we do have the advantage
+that we have complete control over the TCP socket.
+We will need to both read and write from the client socket, and we’ll construct the
+actual request line in accordance with the HTTP standard (which is known as RFC
+2616). The resulting code will look something like this:
+String hostname = "www.example.com";
+int port = 80;
+String filename = "/index.html";
+try (Socket sock = new Socket(hostname, port);
+ BufferedReader from = new BufferedReader(
+ new InputStreamReader(sock.getInputStream()));
+ PrintWriter to = new PrintWriter(
+ new OutputStreamWriter(sock.getOutputStream())); ) {
+ // The HTTP protocol
+ to.print("GET " + filename +
+ " HTTP/1.1\r\nHost: "+ hostname +"\r\n\r\n");
+ to.flush();
+ for(String l = null; (l = from.readLine()) != null; )
+ System.out.println(l);
+}
+On the server side, we’ll need to receive possibly multiple incoming connections. To
+handle this, we’ll need to kick off a main server loop, then use accept() to take a
+new connection from the operating system. The new connection then will need to
+be quickly passed to a separate handler class, so that the main server loop can get
+back to listening for new connections. The code for this is a bit more involved than
+the client case:
+// Handler class
+private static class HttpHandler implements Runnable {
+ private final Socket sock;
+ HttpHandler(Socket client) { this.sock = client; }
+ public void run() {
+ try (BufferedReader in =
+ new BufferedReader(
+ new InputStreamReader(sock.getInputStream()));
+ PrintWriter out =
+ new PrintWriter(
+ new OutputStreamWriter(sock.getOutputStream())); ) {
+ out.print("HTTP/1.0 200\r\nContent-Type: text/plain\r\n\r\n");
+ String line;
+ while((line = in.readLine()) != null) {
+ if (line.length() == 0) break;
+ out.println(line);
+ }
+ } catch(Exception e) {
+ // Handle exception
+ }
+ }
+}
+// Main server loop
+public static void main(String[] args) {
+ try {
+ int port = Integer.parseInt(args[0]);
+ ServerSocket ss = new ServerSocket(port);
+ for(;;) {
+ Socket client = ss.accept();
+ HTTPHandler hndlr = new HTTPHandler(client);
+ new Thread(hndlr).start();
+ }
+ } catch (Exception e) {
+ // Handle exception
+ }
+}
+When designing a protocol for applications to communicate over TCP, there’s a sim‐
+ple and profound network architecture principle, known as Postel’s Law (after Jon
+Postel, one of the fathers of the Internet) that should always be kept in mind. It is
+sometimes stated as follows: “Be strict about what you send, and liberal about what
+you will accept.” This simple principle means that communication can remain
+broadly possible in a network system, even in the event of quite imperfect imple‐
+mentations.
+Postel’s Law, when combined with the general principle that the protocol should be
+as simple as possible (sometimes called the KISS principle), will make the develo‐
+per’s job of implementing TCP-based communication much easier than it otherwise
+would be.
+Below TCP is the Internet’s general-purpose haulage protocol—the Internet Proto‐
+col (IP) itself.
+IP
+IP is the “lowest common denominator” transport, and provides a useful abstrac‐
+tion over the physical network technologies that are used to actually move bytes
+from A to B.
+Unlike TCP, delivery of an IP packet is not guaranteed, and a packet can be dropped
+by any overloaded system along the path. IP packets do have a destination, but usu‐
+ally no routing data—it’s the responsiblity of the (possibly many different) physical
+transports along the route to actually deliver the data.
+It is possible to create “datagram” services in Java that are based around single IP
+packets (or those with a UDP header, instead of TCP), but this is not often required
+except for extremely low-latency applications. Java uses the class DatagramSocket to
+implement this functionality, although few developers should ever need to venture
+this far down the network stack.
+Finally, it’s worth noting some changes that are currently in-flight in the addressing
+schemes that are used across the Internet. The current version of IP that is in use is
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
